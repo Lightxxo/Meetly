@@ -1,6 +1,6 @@
 // server/services/syncEvents.ts
 import db from '../models';
-import client from './elasticSearch'; // make sure the filename matches exactly (all lowercase)
+import client from './elasticsearch'; // make sure the filename matches exactly (all lowercase)
 
 async function syncEvents() {
   // Fetch events along with associated event types

@@ -13,9 +13,13 @@ import pLimit from 'p-limit';
 import pidusage from 'pidusage';
 import os from "os";
 import { faker, tr } from '@faker-js/faker';
-const client = require('./services/elasticsearch');
+import client from './services/elasticsearch';
+
 
 const usedAdjectives = new Set();
+
+
+
 
 const getUniqueAdjective = () => {
     if (usedAdjectives.size === 500) usedAdjectives.clear(); 
@@ -1139,7 +1143,7 @@ controller.searchEvents = async (req:any, res:Response) => {
     }
 
     // Execute the query in Elasticsearch
-    const { body } = await client.search(esQuery);
+    const { body }:any = await client.search(esQuery);
     const eventIDs = body.hits.hits.map((hit:any) => hit._id);
 
     // Option A: Return ES results directly:
@@ -1163,6 +1167,21 @@ controller.searchEvents = async (req:any, res:Response) => {
   }
 };
 
+
+controller.getElasticIndex = async (req:any, res:Response)=>{
+  await client.indices.refresh({ index: 'events' });
+  const countResponse:any = await client.count({ index: 'events' });
+  console.log(`Indexed document count: ${countResponse.count}`);
+  const countt = countResponse.count
+
+  const searchResponse = await client.search({
+    index: 'events',
+    body: { query: { match_all: {} } },
+  });
+  console.log('Search hits:', searchResponse.hits.hits);
+  const hitts = searchResponse.hits.hits
+  res.json({countt, hitts})
+}
 
 const aaa = 0
 
@@ -1315,7 +1334,6 @@ const generateDeferredInteractionsForEvent = (
   return { commentRecords, attendanceRecords };
 };
 
-
 const createSampleEvents = async (
   n: number,
   users: string[],
@@ -1330,6 +1348,8 @@ const createSampleEvents = async (
     const imageFiles = fs
       .readdirSync(sampleImagesFolder)
       .filter((file: string) => /\.(jpg|jpeg|png|gif)$/i.test(file));
+    
+    // Create or get event types in the DB and cache them.
     const cachedEventTypes: { [key: string]: number } = {};
     for (const typeName of randomData.randomEventTypes) {
       if (!cachedEventTypes[typeName]) {
@@ -1340,6 +1360,7 @@ const createSampleEvents = async (
         cachedEventTypes[typeName] = eventType.eventTypeID;
       }
     }
+    
     const eventsData: any[] = [];
     const eventsMeta: any[] = [];
     for (let i = 0; i < n; i++) {
@@ -1361,7 +1382,6 @@ const createSampleEvents = async (
         const savedName = await saveImageWithTimestampAsync(file, destinationFolder);
         savedImageUrls.push(`${BASE_URL}/uploads/events/${savedName}`);
       }
-
       const thumbnail = savedImageUrls[0] || "";
       eventsData.push({
         hostID: users[i % users.length],
@@ -1373,10 +1393,18 @@ const createSampleEvents = async (
       });
       eventsMeta.push({
         savedImageUrls,
-        eventTypes: getRandomElements(randomData.randomEventTypes, Math.floor(Math.random()*randomData.randomEventTypes.length)),
+        // For event types, pick a random subset
+        eventTypes: getRandomElements(
+          randomData.randomEventTypes,
+          Math.floor(Math.random() * randomData.randomEventTypes.length)
+        ),
       });
     }
-    const createdEvents:any = await db.Event.bulkCreate(eventsData, { returning: true });
+    
+    // Bulk create events with individual hooks enabled (this triggers afterCreate hook)
+    const createdEvents: any = await db.Event.bulkCreate(eventsData, { returning: true, individualHooks: true });
+    
+    // Bulk create event images and join table records for event types
     const eventImagesData: any[] = [];
     const eventTypesData: any[] = [];
     createdEvents.forEach((event: any, index: number) => {
@@ -1385,6 +1413,7 @@ const createSampleEvents = async (
         eventImagesData.push({ eventID: event.eventID, image: url });
       });
       meta.eventTypes.forEach((typeName: string) => {
+        // Using the cached event type id
         eventTypesData.push({ eventID: event.eventID, eventTypeID: cachedEventTypes[typeName] });
       });
     });
@@ -1392,13 +1421,16 @@ const createSampleEvents = async (
       db.EventImage.bulkCreate(eventImagesData),
       db.EventTypeOfEvent.bulkCreate(eventTypesData),
     ]);
+    
+    // Bulk create event attendances for each created event
     const attendanceData = createdEvents.map((event: any) => ({
       eventID: event.eventID,
       userID: event.hostID,
       status: 'Going',
     }));
     await db.EventAttendance.bulkCreate(attendanceData);
-    // Generate deferred interaction records in bulk.
+    
+    // Generate deferred interactions (comments, additional attendances)
     let allCommentRecords: any[] = [];
     let allAttendanceRecords: any[] = [];
     for (const event of createdEvents) {
@@ -1412,16 +1444,21 @@ const createSampleEvents = async (
       allAttendanceRecords.push(...attendanceRecords);
     }
     const promises = [];
-
     if (allCommentRecords.length > 0) {
       promises.push(db.EventComment.bulkCreate(allCommentRecords));
     }
-    
     if (allAttendanceRecords.length > 0) {
       promises.push(db.EventAttendance.bulkCreate(allAttendanceRecords, { ignoreDuplicates: true }));
     }
-    
     await Promise.all(promises);
+    
+    // **** IMPORTANT STEP: Reindex each event AFTER the join table is populated ****
+    for (const event of createdEvents) {
+      // Call the reindex function (imported from your Event model)
+      // Ensure you're calling the updated reindexEvent that re-fetches the event with joins.
+      await db.Event.reindexEvent(event);
+    }
+    
     const elapsedTime = Date.now() - startTime;
     console.log(`Created ${n} sample events sequentially in ${formatDuration(elapsedTime)}.`);
   } catch (error) {
@@ -1429,47 +1466,68 @@ const createSampleEvents = async (
   }
 };
 
-const createEventsDirectly = async (m: number, users: string[], usernames: string[], minCom:number=0, maxCom:number=1, minRsvp:number=0, maxRsvp:number=0, minImg:number = 1, maxImg:number = 1, minType:number = 1, maxType:number= 2 , adj:boolean = false) => {
+const createEventsDirectly = async (
+  m:any, // total number of events to insert
+  users:any, 
+  usernames:any, 
+  minCom = 0, 
+  maxCom = 1, 
+  minRsvp = 0, 
+  maxRsvp = 0, 
+  minImg = 1, 
+  maxImg = 1, 
+  minType = 1, 
+  maxType = 2, 
+  adj = false
+) => {
   try {
+    // Read image files from the uploads folder.
     const imageFiles = fs
       .readdirSync('./uploads/events/')
-      .filter((file: string) => /\.(jpg|jpeg|png|gif)$/i.test(file));
-    const cachedEventTypes: { [key: string]: number } = {};
+      .filter((file) => /\.(jpg|jpeg|png|gif)$/i.test(file));
+      
+    // Build a cache of event types (findOrCreate for each type)
+    const cachedEventTypes:any = {};
     for (const typeName of randomData.randomEventTypes) {
       if (!cachedEventTypes[typeName]) {
-        const [eventType]: any = await db.EventType.findOrCreate({
+        const [eventType]:any = await db.EventType.findOrCreate({
           where: { eventType: typeName },
           defaults: { eventType: typeName },
         });
         cachedEventTypes[typeName] = eventType.eventTypeID;
       }
     }
+    
     const BATCH_SIZE = 1000;
     const limit = pLimit(5);
+    
     for (let batchStart = 0; batchStart < m; batchStart += BATCH_SIZE) {
+      // Throttle if CPU usage is high.
       const cpuUsage = await checkCpuUsage();
       if (cpuUsage > 80) {
         console.log(`High CPU usage detected (${cpuUsage.toFixed(2)}%). Pausing for 10 seconds...`);
         await new Promise((resolve) => setTimeout(resolve, 10000));
       }
+      
       const batchStartTime = Date.now();
       const batchEnd = Math.min(batchStart + BATCH_SIZE, m);
       const batchId = Math.floor(batchStart / BATCH_SIZE);
       const batchPromises = [];
+      
       for (let i = batchStart; i < batchEnd; i++) {
         batchPromises.push(
           limit(async () => {
+            // Pick a random event title from your pool.
             const randomEventTitle = randomData.randomEventTitle[
               Math.floor(Math.random() * randomData.randomEventTitle.length)
             ];
             let uniqueEventTitle;
-
-            if (adj){
-              uniqueEventTitle =  ` ${getUniqueAdjective()} `+ randomEventTitle ;
+            if (adj) {
+              uniqueEventTitle = ` ${getUniqueAdjective()} ` + randomEventTitle;
             } else {
               uniqueEventTitle = generateUniqueEventTitle(randomEventTitle, batchId, i);
             }
-            
+            // Get random description, location, date.
             const eventDescription = randomData.randomEventDescriptions[
               Math.floor(Math.random() * randomData.randomEventDescriptions.length)
             ];
@@ -1478,46 +1536,80 @@ const createEventsDirectly = async (m: number, users: string[], usernames: strin
             ];
             const eventDate = new Date(Date.now() + Math.floor(Math.random() * 10000000000));
             const hostID = users[i % users.length];
-            const selectedImages = getRandomElements(imageFiles, Math.floor(Math.random() * minImg) + maxImg);
+            // Select a random set of images.
+            const selectedImages = getRandomElements(
+              imageFiles,
+              Math.floor(Math.random() * minImg) + maxImg
+            );
             const imageUrls = selectedImages.map((file) => `${BASE_URL}/uploads/events/${file}`);
             const thumbnail = imageUrls[0] || '';
             return {
-              eventData: { hostID, eventTitle: uniqueEventTitle, description: eventDescription, location: eventLocation, eventDate, thumbnail },
-              meta: { selectedImages: imageUrls, eventTypes: getRandomElements(randomData.randomEventTypes, Math.floor(Math.random()*maxType + minType)) }
+              eventData: {
+                hostID,
+                eventTitle: uniqueEventTitle,
+                description: eventDescription,
+                location: eventLocation,
+                eventDate,
+                thumbnail,
+              },
+              meta: {
+                selectedImages: imageUrls,
+                // Random subset of event types.
+                eventTypes: getRandomElements(
+                  randomData.randomEventTypes,
+                  Math.floor(Math.random() * maxType + minType)
+                ),
+              },
             };
           })
         );
       }
+      
+      // Resolve all promises for this batch.
       const batchResults = await Promise.all(batchPromises);
       const eventsData = batchResults.map((result) => result.eventData);
       const eventsMeta = batchResults.map((result) => result.meta);
-      const createdEvents:any = await db.sequelize.transaction(async (t) => {
-        return await db.Event.bulkCreate(eventsData, { transaction: t, returning: true });
+      
+      // Bulk create events with individualHooks enabled.
+      const createdEvents = await db.sequelize.transaction(async (t) => {
+        return await db.Event.bulkCreate(eventsData, {
+          transaction: t,
+          returning: true,
+          individualHooks: true,
+        });
       });
-      const eventImagesData: any[] = [];
-      const eventTypesData: any[] = [];
-      createdEvents.forEach((event: any, index: number) => {
+      
+      // Prepare join data for images and event types.
+      const eventImagesData:any = [];
+      const eventTypesData:any = [];
+      createdEvents.forEach((event:any, index) => {
         const meta = eventsMeta[index];
-        meta.selectedImages.forEach((url: string) => {
+        meta.selectedImages.forEach((url) => {
           eventImagesData.push({ eventID: event.eventID, image: url });
         });
-        meta.eventTypes.forEach((typeName: string) => {
+        meta.eventTypes.forEach((typeName) => {
           eventTypesData.push({ eventID: event.eventID, eventTypeID: cachedEventTypes[typeName] });
         });
       });
+      
+      // Insert images and join table records.
       await Promise.all([
         db.EventImage.bulkCreate(eventImagesData),
-        db.EventTypeOfEvent.bulkCreate(eventTypesData),
+        db.EventTypeOfEvent.bulkCreate(eventTypesData, { individualHooks: true }),
       ]);
-      const attendanceData = createdEvents.map((event: any) => ({
+      
+      // Create attendances.
+      const attendanceData = createdEvents.map((event:any) => ({
         eventID: event.eventID,
         userID: event.hostID,
         status: 'Going',
       }));
       await db.EventAttendance.bulkCreate(attendanceData);
-      let allCommentRecords: any[] = [];
-      let allAttendanceRecords: any[] = [];
-      for (const event of createdEvents) {
+      
+      // Generate deferred interactions.
+      let allCommentRecords = [];
+      let allAttendanceRecords = [];
+      for (const event  of createdEvents as any) {
         const { commentRecords, attendanceRecords } = generateDeferredInteractionsForEvent(
           event.eventID,
           users,
@@ -1532,24 +1624,28 @@ const createEventsDirectly = async (m: number, users: string[], usernames: strin
         allAttendanceRecords.push(...attendanceRecords);
       }
       const promises = [];
-
       if (allCommentRecords.length > 0) {
         promises.push(db.EventComment.bulkCreate(allCommentRecords));
       }
-      
       if (allAttendanceRecords.length > 0) {
         promises.push(db.EventAttendance.bulkCreate(allAttendanceRecords, { ignoreDuplicates: true }));
       }
-      
       await Promise.all(promises);
+      
+      // *** NEW STEP: Reindex each event AFTER join table records are inserted ***
+      // This ensures the Elasticsearch index gets the associated event types.
+      for (const event of createdEvents) {
+        await db.Event.reindexEvent(event);
+      }
+      
       const batchElapsedTime = Date.now() - batchStartTime;
-      // console.log(`Direct events batch ${batchStart} to ${batchEnd} processed in ${formatDuration(batchElapsedTime)}.`);
+      console.log(`Direct events batch ${batchStart} to ${batchEnd} processed in ${formatDuration(batchElapsedTime)}.`);
     }
-    // console.log(`Successfully created ${m} direct events.`);
   } catch (error) {
     console.error('Error in createEventsDirectly:', error);
   }
 };
+
 
 controller.insertSampleData = async (req: any, res: any) => {
   const { n, m } = req.body;
@@ -1580,6 +1676,8 @@ controller.insertSampleData = async (req: any, res: any) => {
   console.log(`All batches completed in ${totalDuration.toFixed(2)} seconds.`);
   await createEventsDirectly(500, users, usernames, 10, 20, 10, 20, 3, 8, 4, 9, true);
   console.log('Added 500 High volume data');
+
+  
   res.json({ message: 'Created N Events Successfully' });
 };
 
@@ -1651,7 +1749,7 @@ controller.createSampleEventController = async (req: any, res: any): Promise<voi
       eventID,
       eventTypeID: cachedEventTypes[typeName],
     }));
-    await db.EventTypeOfEvent.bulkCreate(eventTypesData);
+    await db.EventTypeOfEvent.bulkCreate(eventTypesData, {individualHooks: true});
     await db.EventAttendance.create({
       eventID,
       userID: userID,

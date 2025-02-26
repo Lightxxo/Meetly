@@ -1,6 +1,6 @@
 // server/models/EventTypeOfEvent.js
 import { DataTypes, Model, Sequelize } from 'sequelize';
-import client from '../services/elasticSearch';
+import client from '../services/elasticsearch';
 
 export default (sequelize: Sequelize) => {
   class EventTypeOfEvent extends Model {}

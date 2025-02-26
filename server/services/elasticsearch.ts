@@ -12,39 +12,32 @@ const client = new Client({
   },
 });
 
-async function waitForDeletion(index: string, timeout = 5000, interval = 500): Promise<void> {
-  const start = Date.now();
-  while (Date.now() - start < timeout) {
-    const exists:any = await client.indices.exists({ index });
-    if (!exists.body) {
-      return;
-    }
-    // Wait for a short interval before checking again
-    await new Promise((resolve) => setTimeout(resolve, interval));
-  }
-  throw new Error(`Index ${index} was not deleted within ${timeout}ms`);
-}
-
 async function createEventIndex() {
-  // Check if we should force re-create the index via an environment flag
-  const forceRecreate = true;
+  const forceRecreate = true; // or use an environment variable
 
   try {
     const exists: any = await client.indices.exists({ index: 'events' });
     if (exists.body) {
       if (forceRecreate) {
-        // Delete the index if it exists and the flag is set
-        await client.indices.delete({ index: 'events' });
-        console.log('Deleted existing "events" index due to FORCE_RECREATE_INDEX flag.');
-        // Wait until the deletion is complete
-        await waitForDeletion('events', 5000, 500);
+        // Initiate deletion and log immediately without waiting for completion.
+        client.indices
+          .delete({ index: 'events' })
+          .then(() =>
+            console.log('Forced deletion initiated for "events" index.')
+          )
+          .catch((deleteError) =>
+            console.error('Error initiating index deletion:', deleteError)
+          );
+        console.log(
+          'Forced deletion has been initiated; attempting to create index immediately.'
+        );
       } else {
         console.log('Elasticsearch index "events" already exists. Skipping creation.');
         return;
       }
     }
 
-    // Create the index
+    // Attempt to create the index immediately.
     await client.indices.create({
       index: 'events',
       body: {
@@ -61,9 +54,19 @@ async function createEventIndex() {
       },
     });
     console.log('Elasticsearch index "events" created');
-  } catch (error) {
-    console.error('Error creating index:', error);
-    throw error;
+  } catch (error: any) {
+    // If creation fails because the index still exists, catch that error.
+    if (
+      error.meta &&
+      error.meta.body &&
+      error.meta.body.error &&
+      error.meta.body.error.type === 'resource_already_exists_exception'
+    ) {
+      console.log('Index "events" already exists. Forced deletion may still be in progress.');
+    } else {
+      console.error('Error creating index:', error);
+      throw error;
+    }
   }
 }
 
