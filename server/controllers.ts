@@ -13,6 +13,7 @@ import pLimit from 'p-limit';
 import pidusage from 'pidusage';
 import os from "os";
 import { faker, tr } from '@faker-js/faker';
+const client = require('./services/elasticsearch');
 
 const usedAdjectives = new Set();
 
@@ -1017,76 +1018,150 @@ controller.getEventTypes = async (req: Request, res: Response) => {
   }
 };
 
-controller.searchEvents = async (req: Request, res: Response) => {
+// controller.searchEvents = async (req: Request, res: Response) => {
+//   try {
+//     // Destructure query parameters (all optional except 'text')
+//     const { text, types, start, end } = req.query as {
+//       text?: string;
+//       types?: string;
+//       start?: string;
+//       end?: string;
+//     };
+
+//     // Build the main where condition.
+//     // If text is provided, search both eventTitle and location using ILIKE for case-insensitive matching.
+//     const where: any = {};
+//     if (text && text.trim()) {
+//       where[Op.or] = [
+//         { eventTitle: { [Op.iLike]: `%${text.trim()}%` } },
+//         { location: { [Op.iLike]: `%${text.trim()}%` } },
+//       ];
+//     }
+
+//     // Filter by eventDate if a start or end date is provided.
+//     if (start || end) {
+//       where.eventDate = {};
+//       if (start) {
+//         where.eventDate[Op.gte] = new Date(start);
+//       }
+//       if (end) {
+//         where.eventDate[Op.lte] = new Date(end);
+//       }
+//     }
+
+//     // Prepare the include array.
+//     // If "types" are provided (comma separated), filter events to those associated with at least one of the specified types.
+//     const include: any[] = [];
+//     if (types) {
+//       const typesArr = types
+//         .split(",")
+//         .map((t) => t.trim())
+//         .filter((t) => t); // remove any empty strings
+//       include.push({
+//         model: db.EventType,
+//         through: { attributes: [] }, // do not return join attributes
+//         where: { eventType: { [Op.in]: typesArr } },
+//         required: true, // only include events that match the type criteria
+//       });
+//     } else {
+//       // Otherwise, include the associated event types (if you need to display them)
+//       include.push({
+//         model: db.EventType,
+//         through: { attributes: [] },
+//       });
+//     }
+
+//     // Execute the query with ordering and a limit for performance.
+//     const events = await db.Event.findAll({
+//       where,
+//       include,
+//       order: [["eventDate", "ASC"]],
+//       limit: 50, // you can adjust pagination as needed
+//     });
+
+//     res.json(events);
+//     return;
+//   } catch (error) {
+//     console.error("Error in searchEvents:", error);
+//     res.status(500).json({ error: "Internal Server Error" });
+//     return;
+//   }
+// };
+
+
+controller.searchEvents = async (req:any, res:Response) => {
   try {
-    // Destructure query parameters (all optional except 'text')
-    const { text, types, start, end } = req.query as {
-      text?: string;
-      types?: string;
-      start?: string;
-      end?: string;
+    const { text, types, start, end } = req.query;
+    
+    // Build the Elasticsearch query
+    const esQuery:any = {
+      index: 'events',
+      body: {
+        query: {
+          bool: {
+            must: [],
+            filter: [],
+          },
+        },
+        sort: [
+          { eventDate: { order: "asc" } }
+        ],
+        size: 50,  // Adjust for pagination/performance
+      },
     };
 
-    // Build the main where condition.
-    // If text is provided, search both eventTitle and location using ILIKE for case-insensitive matching.
-    const where: any = {};
     if (text && text.trim()) {
-      where[Op.or] = [
-        { eventTitle: { [Op.iLike]: `%${text.trim()}%` } },
-        { location: { [Op.iLike]: `%${text.trim()}%` } },
-      ];
-    }
-
-    // Filter by eventDate if a start or end date is provided.
-    if (start || end) {
-      where.eventDate = {};
-      if (start) {
-        where.eventDate[Op.gte] = new Date(start);
-      }
-      if (end) {
-        where.eventDate[Op.lte] = new Date(end);
-      }
-    }
-
-    // Prepare the include array.
-    // If "types" are provided (comma separated), filter events to those associated with at least one of the specified types.
-    const include: any[] = [];
-    if (types) {
-      const typesArr = types
-        .split(",")
-        .map((t) => t.trim())
-        .filter((t) => t); // remove any empty strings
-      include.push({
-        model: db.EventType,
-        through: { attributes: [] }, // do not return join attributes
-        where: { eventType: { [Op.in]: typesArr } },
-        required: true, // only include events that match the type criteria
+      esQuery.body.query.bool.must.push({
+        multi_match: {
+          query: text.trim(),
+          fields: ['eventTitle^2', 'description', 'location'],
+          fuzziness: "AUTO",
+        },
       });
     } else {
-      // Otherwise, include the associated event types (if you need to display them)
-      include.push({
-        model: db.EventType,
-        through: { attributes: [] },
-      });
+      esQuery.body.query.bool.must.push({ match_all: {} });
     }
 
-    // Execute the query with ordering and a limit for performance.
-    const events = await db.Event.findAll({
-      where,
-      include,
-      order: [["eventDate", "ASC"]],
-      limit: 50, // you can adjust pagination as needed
-    });
+    if (start || end) {
+      const range:any = {};
+      if (start) range.gte = start;
+      if (end) range.lte = end;
+      esQuery.body.query.bool.filter.push({ range: { eventDate: range } });
+    }
 
+    if (types) {
+      const typesArr = types.split(',').map((t:any) => t.trim()).filter((t:any) => t);
+      if (typesArr.length > 0) {
+        esQuery.body.query.bool.filter.push({
+          terms: { eventTypes: typesArr },
+        });
+      }
+    }
+
+    // Execute the query in Elasticsearch
+    const { body } = await client.search(esQuery);
+    const eventIDs = body.hits.hits.map((hit:any) => hit._id);
+
+    // Option A: Return ES results directly:
+    // res.json(body.hits.hits.map(hit => hit._source));
+
+    // Option B (recommended): Query PostgreSQL for full event details, including associations:
+    const events = await db.Event.findAll({
+      where: { eventID: eventIDs },
+      include: [
+        {
+          model: db.EventType,
+          through: { attributes: [] },
+        },
+      ],
+    });
+    
     res.json(events);
-    return;
   } catch (error) {
     console.error("Error in searchEvents:", error);
     res.status(500).json({ error: "Internal Server Error" });
-    return;
   }
 };
-
 
 
 const aaa = 0

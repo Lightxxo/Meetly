@@ -1,4 +1,6 @@
+// server/models/Event.js
 import { DataTypes, Model, Sequelize } from 'sequelize';
+import client from '../services/elasticSearch'
 
 export default (sequelize: Sequelize) => {
   class Event extends Model {}
@@ -50,6 +52,56 @@ export default (sequelize: Sequelize) => {
       timestamps: true,
     }
   );
+
+  // Helper function: reindex an event (including associated event types)
+  async function reindexEvent(eventInstance:any) {
+    const fullEvent:any = await Event.findByPk(eventInstance.eventID, {
+      include: [
+        {
+          model: sequelize.models.EventType,
+          through: { attributes: [] },
+          attributes: ['eventType'],
+        },
+      ],
+    });
+    const eventTypes = fullEvent.EventTypes ? fullEvent.EventTypes.map((et:any) => et.eventType) : [];
+
+    try {
+      await client.index({
+        index: 'events',
+        id: fullEvent.eventID,
+        body: {
+          eventID: fullEvent.eventID,
+          eventTitle: fullEvent.eventTitle,
+          description: fullEvent.description,
+          location: fullEvent.location,
+          eventDate: fullEvent.eventDate,
+          eventTypes,
+        },
+      });
+    } catch (err) {
+      console.error('Error reindexing event:', err);
+    }
+  }
+
+  Event.afterCreate(async (event) => {
+    await reindexEvent(event);
+  });
+
+  Event.afterUpdate(async (event) => {
+    await reindexEvent(event);
+  });
+
+  Event.afterDestroy(async (event:any) => {
+    try {
+      await client.delete({
+        index: 'events',
+        id: event.eventID,
+      });
+    } catch (err) {
+      console.error('Error deleting event from Elasticsearch:', err);
+    }
+  });
 
   return Event;
 };

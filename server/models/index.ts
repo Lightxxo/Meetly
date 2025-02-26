@@ -129,7 +129,7 @@ const syncDatabase = async () => {
 };
 
 
-force = false; 
+force = true; 
 syncDatabase();
 
 

@@ -22,5 +22,5 @@
 
     "composite": true
   },
-  "include": ["src"]
+  "include": ["src", "server/services/elasticsearch.ts", "server/services/syncEvents.ts"]
 }
