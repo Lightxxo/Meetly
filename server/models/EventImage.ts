@@ -1,7 +1,9 @@
 import { DataTypes, Model, Sequelize } from 'sequelize';
 
-export default (sequelize: Sequelize) => {
+export default (sequelize: Sequelize, shardSuffix?: string) => {
   class EventImage extends Model {}
+
+  const tableName = shardSuffix ? `EventImages_shard${shardSuffix}` : 'EventImages';
 
   EventImage.init(
     {
@@ -15,14 +17,12 @@ export default (sequelize: Sequelize) => {
       },
     },
     {
-      
       sequelize,
-      tableName: 'EventImages',
+      tableName,
       timestamps: false,
     }
   );
 
   EventImage.removeAttribute('id');
-
   return EventImage;
 };

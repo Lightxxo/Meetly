@@ -1,7 +1,9 @@
 import { DataTypes, Model, Sequelize } from 'sequelize';
 
-export default (sequelize: Sequelize) => {
+export default (sequelize: Sequelize, shardSuffix?: string) => {
   class EventAttendance extends Model {}
+
+  const tableName = shardSuffix ? `EventAttendance_shard${shardSuffix}` : 'EventAttendance';
 
   EventAttendance.init(
     {
@@ -14,7 +16,6 @@ export default (sequelize: Sequelize) => {
         type: DataTypes.UUID,
         allowNull: false,
         primaryKey: true,
-        
       },
       status: {
         type: DataTypes.ENUM('Going', 'Interested', 'Not Going'),
@@ -23,10 +24,11 @@ export default (sequelize: Sequelize) => {
     },
     {
       sequelize,
-      tableName: 'EventAttendance',
+      tableName,
       timestamps: false,
     }
   );
+  // Remove the default id attribute that Sequelize adds
   EventAttendance.removeAttribute('id');
   return EventAttendance;
 };

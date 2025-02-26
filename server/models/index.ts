@@ -1,17 +1,8 @@
 import { Sequelize } from "sequelize";
 import dotenv from "dotenv";
-import UserModel from "./User";
-import EventTypeModel from "./EventType";
-import EventModel from "./Event";
-import EventCommentModel from "./EventComment";
-import EventAttendanceModel from "./EventAttendance";
-import EventImageModel from "./EventImage";
-import EventTypeOfEventModel from "./EventTypeOfEvent";
-const fs = require('fs');
-const path = require('path');
+
 dotenv.config();
 
-// ✅ Initialize Sequelize
 const sequelize = new Sequelize({
   dialect: "postgres",
   database: process.env.POSTGRESQL_DATABASE!,
@@ -21,116 +12,65 @@ const sequelize = new Sequelize({
   port: parseInt(process.env.POSTGRESQL_PORT!),
   logging: false,
   pool: {
-    max: 80,         // Maximum number of connections in the pool
-    min: 0,          // Minimum number of connections in the pool
-    acquire: 300000000,  // Time in milliseconds before a connection is considered to be timed out
-    idle: 10000,     // Time in milliseconds before an unused connection is released
+    max: 80,
+    min: 0,
+    acquire: 300000000,
+    idle: 10000,
   },
 });
 
-// ✅ Define Models
+// Non-sharded models
+import UserModel from "./User";
+import EventTypeModel from "./EventType";
+const User = UserModel(sequelize);
+const EventType = EventTypeModel(sequelize);
+
+// Sharded models factory functions
+import EventModel from "./Event";
+import EventAttendanceModel from "./EventAttendance";
+import EventCommentModel from "./EventComment";
+import EventImageModel from "./EventImage";
+import EventTypeOfEventModel from "./EventTypeOfEvent";
+
+// We use 20 shards for the high-traffic tables
+const NUM_SHARDS = 20;
+const sharded:any = {
+  Event: {} as { [key: number]: ReturnType<typeof EventModel> },
+  EventAttendance: {} as { [key: number]: ReturnType<typeof EventAttendanceModel> },
+  EventComment: {} as { [key: number]: ReturnType<typeof EventCommentModel> },
+  EventImage: {} as { [key: number]: ReturnType<typeof EventImageModel> },
+  EventTypeOfEvent: {} as { [key: number]: ReturnType<typeof EventTypeOfEventModel> },
+};
+
+for (let i = 0; i < NUM_SHARDS; i++) {
+  // Pass the shard index (as string) to append to the table name
+  sharded.Event[i] = EventModel(sequelize, i.toString());
+  sharded.EventAttendance[i] = EventAttendanceModel(sequelize, i.toString());
+  sharded.EventComment[i] = EventCommentModel(sequelize, i.toString());
+  sharded.EventImage[i] = EventImageModel(sequelize, i.toString());
+  sharded.EventTypeOfEvent[i] = EventTypeOfEventModel(sequelize, i.toString());
+}
+
+// Helper function to calculate shard index based on an ID (using a simple hash)
+export const getShardIndex = (id: string): number => {
+  const numericID = BigInt("0x" + id.replace(/-/g, ""));
+  return Number(numericID % BigInt(NUM_SHARDS));
+};
+
+// Helper to get the correct sharded model instance.
+// modelName must be one of: 'Event', 'EventAttendance', 'EventComment', 'EventImage', or 'EventTypeOfEvent'
+export const getShardedModel = (modelName: string, id: string) => {
+  const shardIndex = getShardIndex(id);
+  return sharded[modelName][shardIndex];
+};
+
 const db = {
   sequelize,
-  User: UserModel(sequelize),
-  EventType: EventTypeModel(sequelize),
-  Event: EventModel(sequelize),
-  EventComment: EventCommentModel(sequelize),
-  EventAttendance: EventAttendanceModel(sequelize),
-  EventImage: EventImageModel(sequelize),
-  EventTypeOfEvent: EventTypeOfEventModel(sequelize),
+  User,
+  EventType,
+  sharded, // contains all sharded models by table name and shard index
+  getShardedModel,
+  getShardIndex,
 };
-
-// Associations
-
-// User - Event (One-to-Many)
-db.User.hasMany(db.Event, { foreignKey: "hostID", onDelete: "CASCADE" });
-db.Event.belongsTo(db.User, { foreignKey: "hostID", onDelete: "CASCADE" });
-
-// Event - EventComment (One-to-Many)
-db.Event.hasMany(db.EventComment, { foreignKey: "eventID", onDelete: "CASCADE" });
-db.EventComment.belongsTo(db.Event, { foreignKey: "eventID", onDelete: "CASCADE" });
-
-// User - EventComment (One-to-Many)
-db.User.hasMany(db.EventComment, { foreignKey: "userID", onDelete: "CASCADE" });
-db.EventComment.belongsTo(db.User, { foreignKey: "userID", onDelete: "CASCADE" });
-
-// Event - EventAttendance (One-to-Many)
-db.Event.hasMany(db.EventAttendance, { foreignKey: "eventID", onDelete: "CASCADE" });
-db.EventAttendance.belongsTo(db.Event, { foreignKey: "eventID", onDelete: "CASCADE" });
-
-// User - EventAttendance (One-to-Many)
-db.User.hasMany(db.EventAttendance, { foreignKey: "userID", onDelete: "CASCADE" });
-db.EventAttendance.belongsTo(db.User, { foreignKey: "userID", onDelete: "CASCADE" });
-
-// Event - EventImage (One-to-Many)
-db.Event.hasMany(db.EventImage, { foreignKey: "eventID", onDelete: "CASCADE" });
-db.EventImage.belongsTo(db.Event, { foreignKey: "eventID", onDelete: "CASCADE" });
-
-// ✅ Correct Many-to-Many Relationship: Event <-> EventType
-db.Event.belongsToMany(db.EventType, { 
-  through: db.EventTypeOfEvent, 
-  foreignKey: "eventID", 
-  onDelete: "CASCADE",
-});
-
-db.EventType.belongsToMany(db.Event, { 
-  through: db.EventTypeOfEvent, 
-  foreignKey: "eventTypeID", 
-  onDelete: "NO ACTION",
-});
-
-// ✅ Fix: Explicitly Associate EventTypeOfEvent with Event & EventType
-db.Event.hasMany(db.EventTypeOfEvent, { foreignKey: "eventID", onDelete: "CASCADE" });
-db.EventTypeOfEvent.belongsTo(db.Event, { foreignKey: "eventID" });
-
-db.EventType.hasMany(db.EventTypeOfEvent, { foreignKey: "eventTypeID", onDelete: "CASCADE" });
-db.EventTypeOfEvent.belongsTo(db.EventType, { foreignKey: "eventTypeID" });
-
-
-
-// Define the global force variable
-let force = false; // Set to true when needed
-
-const syncDatabase = async () => {
-  try {
-    // If force is true, delete all images in ./uploads/events/
-    if (force) {
-      const directoryPath = path.join(__dirname, '../uploads/events/');
-
-      // Check if the directory exists
-      if (fs.existsSync(directoryPath)) {
-        const files = fs.readdirSync(directoryPath);
-
-        // Delete all files in the directory
-        files.forEach((file:any) => {
-          const filePath = path.join(directoryPath, file);
-          if (fs.lstatSync(filePath).isFile()) {
-            fs.unlinkSync(filePath); // Delete file
-            console.log(`Deleted ${file}`);
-          }
-        });
-      } else {
-        console.log('Directory does not exist.');
-      }
-    }
-
-    // Synchronize the database, passing the global force variable
-    await sequelize.sync({ alter: true, force });
-
-    // Ensure createdAt index exists
-    await sequelize.query(
-      `CREATE INDEX IF NOT EXISTS idx_createdAt ON "Events"("createdAt");`
-    );
-
-    console.log("✅ Database synchronized successfully.");
-  } catch (error) {
-    console.error("❌ Database synchronization failed:", error);
-  }
-};
-
-// Example usage
-force = true; // Set to true to delete images and force the sync
-syncDatabase();
-
 
 export default db;

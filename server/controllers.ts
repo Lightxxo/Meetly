@@ -13,6 +13,7 @@ import pLimit from 'p-limit';
 import pidusage from 'pidusage';
 import os from "os";
 import { faker, tr } from '@faker-js/faker';
+import  { getShardedModel } from './models';
 
 const usedAdjectives = new Set();
 
@@ -1075,7 +1076,7 @@ controller.searchEvents = async (req: Request, res: Response) => {
       where,
       include,
       order: [["eventDate", "ASC"]],
-      limit: 50, // you can adjust pagination as needed
+      limit: 50, // adjust pagination as needed
     });
 
     res.json(events);

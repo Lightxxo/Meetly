@@ -1,7 +1,10 @@
 import { DataTypes, Model, Sequelize } from 'sequelize';
 
-export default (sequelize: Sequelize) => {
+export default (sequelize: Sequelize, shardSuffix?: string) => {
   class Event extends Model {}
+
+  // If a shardSuffix is provided, use a different physical table name
+  const tableName = shardSuffix ? `Events_shard${shardSuffix}` : 'Events';
 
   Event.init(
     {
@@ -46,7 +49,7 @@ export default (sequelize: Sequelize) => {
     },
     {
       sequelize,
-      tableName: 'Events',
+      tableName,
       timestamps: true,
     }
   );

@@ -1,24 +1,26 @@
 import { DataTypes, Model, Sequelize } from 'sequelize';
 
-export default (sequelize: Sequelize) => {
+export default (sequelize: Sequelize, shardSuffix?: string) => {
   class EventTypeOfEvent extends Model {}
+
+  const tableName = shardSuffix ? `EventTypeOfEvents_shard${shardSuffix}` : 'EventTypeOfEvents';
 
   EventTypeOfEvent.init(
     {
       eventTypeID: {
         type: DataTypes.UUID,
         allowNull: false,
-        primaryKey: true, 
+        primaryKey: true,
       },
       eventID: {
         type: DataTypes.UUID,
         allowNull: false,
-        primaryKey: true, 
+        primaryKey: true,
       },
     },
     {
       sequelize,
-      tableName: 'EventTypeOfEvents',
+      tableName,
       timestamps: false,
     }
   );
