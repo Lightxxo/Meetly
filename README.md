@@ -1,6 +1,9 @@
 # Meetly 🚀
 
-Meetly is a full‐stack application inspired by Meetup.com, enabling users to create and manage events, RSVP, and discover events. It features a robust backend and a dynamic React frontend for seamless event management.
+Meetly is a full‐stack application inspired by Meetup.com, enabling users to create and manage events, RSVP, and discover events. It features a robust backend and a dynamic React frontend for seamless event management. Project Demo:
+
+[![Demo](https://img.youtube.com/vi/B3TABKQgHHw/0.jpg)](https://www.youtube.com/watch?v=B3TABKQgHHw)
+
 
 ---
 
