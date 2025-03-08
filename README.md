@@ -45,7 +45,7 @@ Meetly is a full‐stack application inspired by Meetup.com, enabling users to c
 Meetly/
 ├── public/          # Static assets and HTML files
 ├── src/             # Frontend source code (React & Tailwind CSS)
-├── server/          # Backend server code (Express.js & MongoDB)
+├── server/          # Backend server code (Express.js & PostgreSQL)
 │   ├── controllers/ # Controller files (including sample data logic)
 │   ├── routes/      # Route definitions directing endpoints (e.g., /sample-data)
 │   └── ...          # Additional backend configuration files (ESLint, etc.)
@@ -66,7 +66,7 @@ Meetly/
 
 **Backend:**  
 - **Node.js** & **Express.js** 🚀 – Server‐side framework powering the API.  
-- **MongoDB** 🗄️ – NoSQL database for flexible data storage.
+- **PostgreSQL** 🗄️ – SQL database for structured data storage.
 
 **Authentication:**  
 - **JWT (JSON Web Tokens)** 🔑 – Secure authentication and authorization.
@@ -89,7 +89,7 @@ Meetly/
 
 3. **Configure Environment Variables:**  
    - Create a `.env` file in the root directory (and in the `server` folder if required).  
-   - Add necessary variables (e.g., MongoDB connection URI, JWT secret).
+   - Add necessary variables (e.g., PostgreSQL connection URI, JWT secret).
 
 4. **Run the Application:**  
    **Frontend:**  
