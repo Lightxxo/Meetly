@@ -156,10 +156,9 @@ Meetly includes a dedicated endpoint for populating the database with test data.
 
 ## Possible Improvements 🚧
 
-- [ ] **Real‐Time Notifications:** Add push notifications for event updates.  
 - [ ] **Enhanced Event Details:** Introduce more detailed event descriptions and multimedia support.  
 - [ ] **UI/UX Refinements:** Continuous improvements to the user interface and overall experience.  
-- [ ] **Performance Optimizations:** Further optimization of data handling and sample data generation.
+- [ ] **Performance Optimizations:** Further optimization of data handling, database optimizations and sample data generation.
 
 ---
 
